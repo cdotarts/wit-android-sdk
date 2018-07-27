@@ -40,11 +40,25 @@ public class Wit implements IWitCoordinator {
 
     /**
      * Configure the voice activity detection algorithm:
-     * - Wit.vadConfig.disable
+     * - Wit.vadConfig.disabled
      * - Wit.vadConfig.detectSpeechStop (default)
      * - Wit.vadConfig.full
      */
     public vadConfig vad = vadConfig.detectSpeechStop;
+
+    /**
+     * Set VAD sensitivity (0-100):
+     * - Lower values are for strong voice signals like for a cellphone or personal mic.
+     * - Higher values are for use with a fixed-position mic or any application with voice buried in ambient noise.
+     * - Defaults to 0
+ */
+    public int vadSensitivity = 0;
+
+    /**
+     * Set maximum message time in ms
+     * Defaults to 7000
+     */
+    public int vadTimeout = 7000;
 
     /**
      * Instantiating the Wit instance.
@@ -63,7 +77,7 @@ public class Wit implements IWitCoordinator {
      */
     public void startListening() throws IOException {
         WitContextSetter witContextSetter = new WitContextSetter(_context, _androidContext);
-        _witMic = new WitMic(this, vad);
+        _witMic = new WitMic(this, vad, vadSensitivity, vadTimeout);
         _witMic.startRecording();
         _in = _witMic.getInputStream();
         if (vad != vadConfig.full) {
@@ -169,6 +183,11 @@ public class Wit implements IWitCoordinator {
         else {
             Log.d(TAG, "Wit did grasp " + response.getOutcomes().size() +" outcome(s)");
             _witListener.witDidGraspIntent(response.getOutcomes(), response.getMsgId(), null);
+            if(!_witMic.lastStoppedByVad){
+               WitMessageVadFail failMessage = new WitMessageVadFail(_accessToken,response.getMsgId(),vadSensitivity,"android-3.2.0",_witListener);
+               failMessage.execute();
+
+            }
         }
     }
 

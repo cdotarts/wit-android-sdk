@@ -1,13 +1,13 @@
 buildscript {
     repositories {
-        maven { url 'http://repo1.maven.org/maven2' }
+        maven { url 'https://repo1.maven.org/maven2' }
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:0.12.+'
+        classpath 'com.android.tools.build:gradle:1.0.1'
     }
 }
 
-apply plugin: 'android-library'
+apply plugin: 'com.android.library'
 
 task wrapper(type: Wrapper) {
     gradleVersion = '1.10'
@@ -18,29 +18,40 @@ repositories {
 }
 
 dependencies {
-    compile('com.google.code.gson:gson:2.2.4')
+    compile('com.google.code.gson:gson:2.3')
     compile('org.apache.directory.studio:org.apache.commons.io:2.4')
+    compile('com.github.wendykierp:JTransforms:3.0')
+<<<<<<< HEAD
+    compile('com.android.support:appcompat-v7:21.0.3')
+=======
     compile('com.android.support:appcompat-v7:19.1.0')
+>>>>>>> 051ae947630fcfb0d3676026f34c5e3e47dda23e
 }
 
 android {
-    compileSdkVersion 19
-    buildToolsVersion "19.1.0"
+    compileSdkVersion 21
+    buildToolsVersion "21.1.2"
 
     defaultConfig {
         minSdkVersion 11
-        targetSdkVersion 19
-        ndk {
-            moduleName "witvad"
-            ldLibs "log"
-        }
+        targetSdkVersion 21
     }
     sourceSets {
         main {
+            jniLibs.srcDir 'src/main/libs'
+            jni.srcDirs = [] //disable automatic ndk-build call
             java {
                 srcDir 'src/main/java'
             }
         }
+    }
+
+    task ndkBuild(type: Exec) {
+        commandLine '/opt/android_ndk/r9d/ndk-build', '-C', file('src/main').absolutePath
+    }
+
+    tasks.withType(JavaCompile) {
+        compileTask -> compileTask.dependsOn ndkBuild
     }
 }
 

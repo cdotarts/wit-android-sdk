@@ -13,6 +13,7 @@ import java.io.PipedOutputStream;
 import java.lang.Thread;
 import java.util.Arrays;
 
+import org.jtransforms.fft.FloatFFT_1D;
 
 /**
  * Created by aric on 9/9/14.
@@ -28,6 +29,10 @@ public class WitMic {
     private PipedOutputStream out;
     IWitCoordinator _witCoordinator;
     protected Wit.vadConfig _vad;
+    protected int _vadSensitivity;
+    protected int _vadTimeout;
+    protected boolean _currentStoppedByVad = false;
+    public boolean lastStoppedByVad = false;
 
     Handler _stopHandler = new Handler() {
         public void handleMessage(Message msg) {
@@ -46,17 +51,20 @@ public class WitMic {
         System.loadLibrary("witvad");
     }
 
-    public native int VadInit();
-    public native int VadStillTalking(short[] arr, int length);
+    public native int VadInit(int vadSensitivity, int vadTimeout);
+    public native int VadStillTalking(short[] samples, float[] fft_mags);
+    public native int GetVadSamplesPerFrame();
     public native void VadClean();
 
-    public WitMic(IWitCoordinator witCoordinator, Wit.vadConfig vad) throws IOException {
+    public WitMic(IWitCoordinator witCoordinator, Wit.vadConfig vad, int vadSensitivity, int vadTimeout) throws IOException {
         int inputStreamSize = getPipedInputStreamSize();
         in = new PipedInputStream(inputStreamSize);
         out = new PipedOutputStream();
         in.connect(out);
         _witCoordinator = witCoordinator;
         _vad = vad;
+        _vadSensitivity = vadSensitivity;
+        _vadTimeout = vadTimeout;
     }
 
     public void startRecording()
@@ -81,6 +89,7 @@ public class WitMic {
             aRecorder.stop();
             aRecorder.release();
             _isRecording = false;
+            lastStoppedByVad = _currentStoppedByVad;
         }
     }
 
@@ -178,9 +187,15 @@ public class WitMic {
             int vadResult;
             int skippingSamples = 0;
 
-
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-            VadInit();
+            VadInit(_vadSensitivity, _vadTimeout);
+
+            FloatFFT_1D fft = new FloatFFT_1D(GetVadSamplesPerFrame());
+            float[] fft_mags = new float[GetVadSamplesPerFrame()/2];
+            float[] fft_modules = new float[GetVadSamplesPerFrame()];
+            short[] samples;
+
+            _currentStoppedByVad = false;
             try {
                 while ((nb = aRecorder.read(buffer, 0, readBufferSize)) > 0) {
 
@@ -188,20 +203,38 @@ public class WitMic {
                         skippingSamples += nb;
                     }
                     if (skippingSamples >= SAMPLE_RATE && _vad != Wit.vadConfig.disabled) {
-                        vadResult = VadStillTalking(buffer, nb);
+                        int samplesAnalyzed = 0;
+                        while(samplesAnalyzed + GetVadSamplesPerFrame() < nb){
+                            samples = Arrays.copyOfRange(buffer, samplesAnalyzed, samplesAnalyzed +GetVadSamplesPerFrame());
+                            for(int i=0; i<GetVadSamplesPerFrame(); i++){
+                                fft_modules[i] = (float)samples[i];
+                            }
+                            fft.realForward(fft_modules); //results are stored in place
 
-                        if (_vad == Wit.vadConfig.full && vadResult == 1) {
-                            _streamingHandler.sendEmptyMessage(0);
-                            _streamingStarted = true;
-                            int nbStreamed = streamPastBuffers(pastByteBuffers);
-                            Log.d(getClass().getName(), "Just caugth "+ nbStreamed + " buffers");
-                        }
+                            //transform to magnitudes
+                            fft_mags[0]=fft_modules[0];
+                            //the 0th (DC) component is different and has no imaginary part
+                            for(int i=1; i<GetVadSamplesPerFrame()/2; i++){
+                                fft_mags[i]=(float)Math.sqrt(Math.pow(fft_modules[2*i],2)+Math.pow(fft_modules[2*i+1],2));
+                            }
 
-                        if (vadResult == 0) {
-                            //Stop the microphone via a Handler so the stopListeing function
-                            // of the IWitCoordinator interface is called on the Wit.startListening
-                            //calling thread
-                            _stopHandler.sendEmptyMessage(0);
+                            vadResult = VadStillTalking(buffer, fft_mags);
+
+                            if (_vad == Wit.vadConfig.full && vadResult == 1) {
+                                _streamingHandler.sendEmptyMessage(0);
+                                _streamingStarted = true;
+                                int nbStreamed = streamPastBuffers(pastByteBuffers);
+                                Log.d(getClass().getName(), "Just caugth "+ nbStreamed + " buffers");
+                            }
+
+                            if (vadResult == 0) {
+                                //Stop the microphone via a Handler so the stopListeing function
+                                // of the IWitCoordinator interface is called on the Wit.startListening
+                                //calling thread
+                                _currentStoppedByVad = true;
+                                _stopHandler.sendEmptyMessage(0);
+                            }
+                            samplesAnalyzed+=GetVadSamplesPerFrame();
                         }
                     }
                     short2byte(buffer, nb, bytes);
